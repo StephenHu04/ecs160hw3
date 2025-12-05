@@ -60,8 +60,12 @@ export AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1
   -- ./png_fuzz_san @@
 ```
 [PART D – CUSTOM MUTATOR + SANITIZED + PNG SEEDS]
-  (assumes your friend’s mutator is at:
-     $ROOT/custom_mutators/libpng_mutator.so )
+```
+gcc -shared -Wall -O3 custom_mutator.c -o custom_mutator.so -fPIC
+```
+```
+export AFL_CUSTOM_MUTATOR_LIBRARY=$(pwd)/custom_mutator.so
+```
 ```
 export AFL_CUSTOM_MUTATOR_LIBRARY=./custom_mutators/libpng_mutator.so
 export AFL_CUSTOM_MUTATOR_ONLY=1

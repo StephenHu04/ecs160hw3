@@ -8,13 +8,7 @@
 > - Use Ubuntu & download tools
 > - Directory called in_png where the 10 images are stored
 
-Update and download tools if needed
-```
-sudo apt update
-sudo apt install -y build-essential autoconf automake libtool pkg-config zlib1g-dev clang git
-```
----
----
+
 
 ### 1. AFL++ & libpng
 

@@ -28,16 +28,21 @@ should see libpng18.a
 [PART B – NO SEEDS]
   (fuzzing png_fuzz_nosani with a dummy seed file)
 ```
-AFL_SKIP_CPUFREQ=1 AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1 \
-./AFLplusplus/afl-fuzz \
-  -i in_empty \
-  -o out_no_seeds_fresh \
+export AFL_SKIP_CPUFREQ=1
+export AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1
+
+./AFLplusplus/afl-fuzz
+  -i in_png
+  -o out_with_seeds
   -- ./png_fuzz_nosani @@
+
 ```
 [PART B – WITH PNG SEEDS]
   (put ~10 PNGs into in_png/ FIRST)
 ```
-AFL_SKIP_CPUFREQ=1 AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1 \
+export AFL_SKIP_CPUFREQ=1
+export AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1
+
 ./AFLplusplus/afl-fuzz \
   -i in_png \
   -o out_with_seeds \
@@ -46,7 +51,9 @@ AFL_SKIP_CPUFREQ=1 AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1 \
 [PART C – ASAN + UBSAN + PNG SEEDS]
   (uses sanitized binary)
 ```
-AFL_SKIP_CPUFREQ=1 AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1 \
+export AFL_SKIP_CPUFREQ=1
+export AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1
+
 ./AFLplusplus/afl-fuzz \
   -i in_png \
   -o out_sanitizer_seeds \
@@ -56,9 +63,11 @@ AFL_SKIP_CPUFREQ=1 AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1 \
   (assumes your friend’s mutator is at:
      $ROOT/custom_mutators/libpng_mutator.so )
 ```
-AFL_CUSTOM_MUTATOR_LIBRARY=./custom_mutators/libpng_mutator.so \
-AFL_CUSTOM_MUTATOR_ONLY=1 \
-AFL_SKIP_CPUFREQ=1 AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1 \
+export AFL_CUSTOM_MUTATOR_LIBRARY=./custom_mutators/libpng_mutator.so
+export AFL_CUSTOM_MUTATOR_ONLY=1
+export AFL_SKIP_CPUFREQ=1
+export AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1
+
 ./AFLplusplus/afl-fuzz \
   -i in_png \
   -o out_custom_mutator \

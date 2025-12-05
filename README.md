@@ -6,6 +6,9 @@
 
 > - Cloned the libraries already
 > - Use Ubuntu & download tools
+> - Directory called in_png where the 10 images are stored
+
+Update and download tools if needed
 ```
 sudo apt update
 sudo apt install -y build-essential autoconf automake libtool pkg-config zlib1g-dev clang git
@@ -38,7 +41,7 @@ ecs160hw3/
 
 ### 2. AFL++ & libpng
 
-Run our build_afl.sh 
+Run build_all.sh 
 
 or
 
@@ -79,51 +82,31 @@ ls libpng/.libs/
 ```
 should see libpng18.a
 
-### 3. Building png_fuzz target
-
-
-```
-./AFLplusplus/afl-cc \
-  -Ilibpng \
-  harness.c \
-  libpng/.libs/libpng18.a \
-  -lz -lm \
-  -o png_fuzz
-```
-Vreify with 
-
-```
-ls -l png_fuzz
-```
-
-### 4. Running AFL++
+### 3. Running AFL++
 
 Without seeds, copy and paste the following cmd
 
 ```
-AFL_SKIP_CPUFREQ=1 AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1 \
-./AFLplusplus/afl-fuzz \
-  -i in_empty \
-  -o out_no_seeds \
-  -- ./png_fuzz @@
+bash scripts/run_afl_no_seeds.sh
 ```
 
 
 With seeds, copy and paste the following cmd
 *Make sure there are 10 images in the directory called in_png/
 ```
-AFL_SKIP_CPUFREQ=1 AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1 \
-./AFLplusplus/afl-fuzz \
-  -i in_png \
-  -o out_png_seeds \
-  -- ./png_fuzz @@
+bash scripts/run_afl_with_seeds.sh
+```
+
+With seeds + sanitizers, copy and paste the following cmd
+```
+bash scripts/run_afl_sanitized_with_seeds.sh
 ```
 Ctrl + C to stop
 
 
 
 
-### 5. Viewing Results
+### 4. Viewing Results
 
 Inside each output folder (out_no_seeds/, out_png_seeds/), look at:
 
@@ -133,55 +116,10 @@ out_XXX/fuzzer_stats
 execs_per_sec — throughput
 bitmap_cvg — coverage
 unique_crashes — number of crashes
-paths_total — number of paths explored
 
 ```
 out_XXX/crashes/
 ```
 Each file here is a crashing input, just count them
-
-### 6. Running with Sanitizers (ASAN + UBSAN)
-Rebuild libpng and png_fuzz using:
-```
-export AFL_USE_ASAN=1
-export AFL_USE_UBSAN=1
-```
-Then run fuzzing again using the PNG seed directory.
-
-1. Remove old build
-```
-rm -rf libpng
-rm png_fuzz
-```
-2. Clone libpng again
-```
-git clone https://github.com/glennrp/libpng.git
-cd libpng
-./autogen.sh
-cd ..
-```
-3. Enable sanitizers
-```
-export AFL_USE_ASAN=1
-export AFL_USE_UBSAN=1
-```
-4. Rebuild libpng with sanitizers
-```
-cd libpng
-CC=../AFLplusplus/afl-cc ./configure --disable-shared
-make -j"$(nproc)"
-cd ..
-```
-5. Rebuild png_fuzz
-```./AFLplusplus/afl-cc \
-  -Ilibpng \
-  harness.c \
-  libpng/.libs/libpng18.a \
-  -lz -lm \
-  -o png_fuzz
-```
-
-Now you're using sanitizers.
-
 
 

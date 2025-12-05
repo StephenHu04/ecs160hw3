@@ -16,90 +16,59 @@ sudo apt install -y build-essential autoconf automake libtool pkg-config zlib1g-
 ---
 ---
 
-### 1. Structure
-
-How our project is structured
-
-ecs160hw3/
-│
-├── harness.c          ← Test program that reads PNG files using libpng
-├── png_fuzz           ← Fuzzing target (created after build)
-│
-├── libpng/            ← LibPNG source (cloned from GitHub)
-│   └── .libs/libpngXX.a  ← Static library created after building
-│
-├── AFLplusplus/       ← AFL++ fuzzer (cloned + compiled)
-│
-├── in_empty/          ← Input directory for fuzzing without seeds
-├── in_png/            ← Directory for seed PNG files
-│
-├── out_no_seeds/      ← AFL output for the no-seed fuzzing run
-├── out_png_seeds/     ← AFL output for seeded fuzzing run
-│
-└── README.md
-
-
-### 2. AFL++ & libpng
+### 1. AFL++ & libpng
 
 Run build_all.sh 
-
-or
-
-
-From your project root:
 ```
-git clone https://github.com/AFLplusplus/AFLplusplus.git
-cd AFLplusplus
-make distrib
-cd ..
+bash build_all.sh
 ```
 
-You should have these files
-```
-AFLplusplus/afl-fuzz
-AFLplusplus/afl-cc
-```
-
-
-LIBPNG
-```
-rm -rf libpng
-git clone https://github.com/glennrp/libpng.git
-cd libpng
-
-# Generate configure script if missing
-[ ! -f configure ] && ./autogen.sh
-
-# Build with AFL compiler
-CC=../AFLplusplus/afl-cc ./configure --disable-shared
-make -j"$(nproc)"
-
-cd ..
-```
 After building verify with
 ```
 ls libpng/.libs/
 ```
 should see libpng18.a
 
-### 3. Running AFL++
+### 2. Running AFL++
 
-Without seeds, copy and paste the following cmd
-
+[PART B – NO SEEDS]
+  (fuzzing png_fuzz_nosani with a dummy seed file)
 ```
-bash scripts/run_afl_no_seeds.sh
+AFL_SKIP_CPUFREQ=1 AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1 \
+./AFLplusplus/afl-fuzz \
+  -i in_empty \
+  -o out_no_seeds_fresh \
+  -- ./png_fuzz_nosani @@
 ```
-
-
-With seeds, copy and paste the following cmd
-*Make sure there are 10 images in the directory called in_png/
+[PART B – WITH PNG SEEDS]
+  (put ~10 PNGs into in_png/ FIRST)
 ```
-bash scripts/run_afl_with_seeds.sh
+AFL_SKIP_CPUFREQ=1 AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1 \
+./AFLplusplus/afl-fuzz \
+  -i in_png \
+  -o out_with_seeds \
+  -- ./png_fuzz_nosani @@
 ```
-
-With seeds + sanitizers, copy and paste the following cmd
+[PART C – ASAN + UBSAN + PNG SEEDS]
+  (uses sanitized binary)
 ```
-bash scripts/run_afl_sanitized_with_seeds.sh
+AFL_SKIP_CPUFREQ=1 AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1 \
+./AFLplusplus/afl-fuzz \
+  -i in_png \
+  -o out_sanitizer_seeds \
+  -- ./png_fuzz_san @@
+```
+[PART D – CUSTOM MUTATOR + SANITIZED + PNG SEEDS]
+  (assumes your friend’s mutator is at:
+     $ROOT/custom_mutators/libpng_mutator.so )
+```
+AFL_CUSTOM_MUTATOR_LIBRARY=./custom_mutators/libpng_mutator.so \
+AFL_CUSTOM_MUTATOR_ONLY=1 \
+AFL_SKIP_CPUFREQ=1 AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1 \
+./AFLplusplus/afl-fuzz \
+  -i in_png \
+  -o out_custom_mutator \
+  -- ./png_fuzz_san @@
 ```
 Ctrl + C to stop
 

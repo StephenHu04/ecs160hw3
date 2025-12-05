@@ -84,23 +84,45 @@ should see libpng18.a
 
 ### 3. Running AFL++
 
-Without seeds, copy and paste the following cmd
+[PART B – NO SEEDS]
+  (fuzzing png_fuzz_nosani with a dummy seed file)
 
-```
-bash scripts/run_afl_no_seeds.sh
-```
+  AFL_SKIP_CPUFREQ=1 AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1 \\
+    "$ROOT/AFLplusplus/afl-fuzz" \\
+      -i "$ROOT/in_empty" \\
+      -o "$ROOT/out_no_seeds" \\
+      -- "$ROOT/png_fuzz_nosani" @@
 
+[PART B – WITH PNG SEEDS]
+  (put ~10 PNGs into in_png/ FIRST)
 
-With seeds, copy and paste the following cmd
-*Make sure there are 10 images in the directory called in_png/
-```
-bash scripts/run_afl_with_seeds.sh
-```
+  AFL_SKIP_CPUFREQ=1 AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1 \\
+    "$ROOT/AFLplusplus/afl-fuzz" \\
+      -i "$ROOT/in_png" \\
+      -o "$ROOT/out_with_seeds" \\
+      -- "$ROOT/png_fuzz_nosani" @@
 
-With seeds + sanitizers, copy and paste the following cmd
-```
-bash scripts/run_afl_sanitized_with_seeds.sh
-```
+[PART C – ASAN + UBSAN + PNG SEEDS]
+  (uses sanitized binary)
+
+  AFL_SKIP_CPUFREQ=1 AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1 \\
+    "$ROOT/AFLplusplus/afl-fuzz" \\
+      -i "$ROOT/in_png" \\
+      -o "$ROOT/out_sanitizer_seeds" \\
+      -- "$ROOT/png_fuzz_san" @@
+
+[PART D – CUSTOM MUTATOR + SANITIZED + PNG SEEDS]
+  (assumes your friend’s mutator is at:
+     $ROOT/custom_mutators/libpng_mutator.so )
+
+  AFL_CUSTOM_MUTATOR_LIBRARY="$ROOT/custom_mutators/libpng_mutator.so" \\
+  AFL_CUSTOM_MUTATOR_ONLY=1 \\
+  AFL_SKIP_CPUFREQ=1 AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1 \\
+    "$ROOT/AFLplusplus/afl-fuzz" \\
+      -i "$ROOT/in_png" \\
+      -o "$ROOT/out_custom_mutator" \\
+      -- "$ROOT/png_fuzz_san" @@
+      
 Ctrl + C to stop
 
 

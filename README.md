@@ -148,5 +148,40 @@ export AFL_USE_UBSAN=1
 ```
 Then run fuzzing again using the PNG seed directory.
 
+1. Remove old build
+```
+rm -rf libpng
+rm png_fuzz
+```
+2. Clone libpng again
+```
+git clone https://github.com/glennrp/libpng.git
+cd libpng
+./autogen.sh
+cd ..
+```
+3. Enable sanitizers
+```
+export AFL_USE_ASAN=1
+export AFL_USE_UBSAN=1
+```
+4. Rebuild libpng with sanitizers
+```
+cd libpng
+CC=../AFLplusplus/afl-cc ./configure --disable-shared
+make -j"$(nproc)"
+cd ..
+```
+5. Rebuild png_fuzz
+```./AFLplusplus/afl-cc \
+  -Ilibpng \
+  harness.c \
+  libpng/.libs/libpng18.a \
+  -lz -lm \
+  -o png_fuzz
+```
+
+Now you're using sanitizers.
+
 
 

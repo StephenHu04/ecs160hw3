@@ -1,0 +1,11 @@
+# environment variables:
+AFL_CUSTOM_INFO_PROGRAM=./png_fuzz_san
+AFL_CUSTOM_INFO_PROGRAM_ARGV=@@
+AFL_CUSTOM_INFO_OUT=out_sanitizer_seeds/default
+AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1
+AFL_NO_UI=1
+AFL_SKIP_CPUFREQ=1
+AFL_USE_ASAN=1
+AFL_USE_UBSAN=1
+# command line:
+'./AFLplusplus/afl-fuzz' '-i' 'in_png' '-o' 'out_sanitizer_seeds' '--' './png_fuzz_san' '@@'

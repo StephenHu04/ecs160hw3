@@ -9,7 +9,7 @@ static const uint8_t PNG_SIG[8] = {
     0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A
 };
 
-#define MAX_CHUNKS 1024
+#define MAX_CHUNKS 2048
 
 // ----------------------- CRC32 IMPLEMENTATION -----------------------
 static uint32_t crc_table[256];
@@ -49,14 +49,17 @@ typedef struct {
 
 void *afl_custom_init(void *afl, unsigned int seed) {
     mutator_state_t *s = calloc(1, sizeof(mutator_state_t));
-    srand(seed);
+    if (!s) return NULL;
+    srand(seed); 
     return s;
 }
 
 void afl_custom_deinit(void *data) {
     mutator_state_t *s = data;
-    free(s->out_buf);
-    free(s);
+    if (s) {
+        free(s->out_buf);
+        free(s);
+    }
 }
 
 // ----------------------- UTILITIES -----------------------
@@ -87,20 +90,29 @@ size_t afl_custom_fuzz(
 ) {
     mutator_state_t *s = data;
 
-    // Ensure output buffer is large enough
-    if (s->out_buf_size < buf_size + 1024) {
-        s->out_buf = realloc(s->out_buf, buf_size + 1024);
-        s->out_buf_size = buf_size + 1024;
+    // Safety check for size to prevent realloc failure or huge memory usage
+    if (buf_size > 10 * 1024 * 1024) { // limit to 10MB
+        *out_buf = buf;
+        return buf_size;
+    }
+
+    if (s->out_buf_size < buf_size + 4096) {
+        uint8_t *new_buf = realloc(s->out_buf, buf_size + 4096);
+        if (!new_buf) {
+            *out_buf = buf; // Fallback if OOM
+            return buf_size; 
+        }
+        s->out_buf = new_buf;
+        s->out_buf_size = buf_size + 4096;
     }
 
     memcpy(s->out_buf, buf, buf_size);
     *out_buf = s->out_buf;
 
-    // FAST EXIT: Not PNG → just havoc
+    // FAST EXIT: Not PNG -> just havoc
     if (buf_size < PNG_SIG_SIZE ||
         memcmp(buf, PNG_SIG, PNG_SIG_SIZE) != 0 ||
-        (rand() % 100 < 10)) {
-
+        (rand() % 100 < 5)) { // Reduced havoc to 5%
         mutate_havoc(s->out_buf, buf_size);
         return buf_size;
     }
@@ -111,8 +123,6 @@ size_t afl_custom_fuzz(
 
     size_t off = PNG_SIG_SIZE;
     while (off + 12 <= buf_size && chunk_count < MAX_CHUNKS) {
-
-        // Read length safely
         uint32_t len =
             (s->out_buf[off+0] << 24) |
             (s->out_buf[off+1] << 16) |
@@ -121,10 +131,9 @@ size_t afl_custom_fuzz(
 
         size_t total_chunk = 12 + (size_t)len;
 
-        // Validate chunk boundaries
-        if (len > 0x7FFFFFFF) break;                     // insane length
-        if (off + total_chunk > buf_size) break;         // truncated
-        if (off + total_chunk < off) break;              // overflow wrap
+        if (len > 0x7FFFFFFF) break;
+        if (off + total_chunk > buf_size) break;
+        if (off + total_chunk < off) break;
 
         chunk_offsets[chunk_count++] = off;
         off += total_chunk;
@@ -133,7 +142,6 @@ size_t afl_custom_fuzz(
             break;
     }
 
-    // If no chunks found → havoc
     if (chunk_count == 0) {
         mutate_havoc(s->out_buf, buf_size);
         return buf_size;
@@ -141,7 +149,6 @@ size_t afl_custom_fuzz(
 
     // ----------------------- SELECT CHUNK -----------------------
     size_t chunk_off = chunk_offsets[rand() % chunk_count];
-
     uint32_t len =
         (s->out_buf[chunk_off+0] << 24) |
         (s->out_buf[chunk_off+1] << 16) |
@@ -152,44 +159,54 @@ size_t afl_custom_fuzz(
     uint8_t *data_ptr = s->out_buf + chunk_off + 8;
     uint8_t *crc_ptr  = data_ptr + len;
 
-    // Safety: ensure crc_ptr is in bounds
-    if (data_ptr + len + 4 > s->out_buf + buf_size) {
-        mutate_havoc(s->out_buf, buf_size);
-        return buf_size;
-    }
+    // CRITICAL FIX: Detect IDAT chunks
+    int is_idat = (memcmp(type_ptr, "IDAT", 4) == 0);
 
     // ----------------------- MUTATE -----------------------
     int strategy = rand() % 4;
 
-    if (strategy == 0 && len > 0) {
+    if (strategy == 0) {
         // DATA MUTATION
-        int n = 1 + (rand() % 5);
-        for (int i = 0; i < n; i++) {
-            size_t pos = rand() % len;
-            data_ptr[pos] ^= (rand() & 0xFF);
+        // FIX: Retries to find a non-IDAT chunk to mutate
+        if (is_idat && chunk_count > 1) {
+             int retries = 5;
+             while (is_idat && retries-- > 0) {
+                 chunk_off = chunk_offsets[rand() % chunk_count];
+                 type_ptr = s->out_buf + chunk_off + 4;
+                 is_idat = (memcmp(type_ptr, "IDAT", 4) == 0);
+             }
+             // Refresh pointers
+             len = (s->out_buf[chunk_off] << 24) | (s->out_buf[chunk_off+1] << 16) |
+                   (s->out_buf[chunk_off+2] << 8) | (s->out_buf[chunk_off+3]);
+             data_ptr = s->out_buf + chunk_off + 8;
+             crc_ptr  = data_ptr + len;
+        }
+
+        if (!is_idat && len > 0) {
+            int n = 1 + (rand() % 5);
+            for (int i = 0; i < n; i++) {
+                size_t pos = rand() % len;
+                data_ptr[pos] ^= (rand() & 0xFF);
+            }
+        } else {
+             // Fallback for IDAT: mutate type (safe) instead of data
+             type_ptr[rand() % 4] ^= 0x20;
         }
 
     } else if (strategy == 1) {
-        // TYPE MUTATION (flip ancillary/critical)
+        // TYPE MUTATION
         type_ptr[rand() % 4] ^= 0x20;
 
     } else if (strategy == 2) {
-        // LENGTH CORRUPTION → no CRC fix
-        s->out_buf[chunk_off + (rand() % 4)] ^= (rand() & 0xFF);
-        return buf_size;
+        // LENGTH CORRUPTION (skip 50% of the time to be safe)
+        if (rand() % 2 == 0) s->out_buf[chunk_off + 3] ^= (rand() & 0xFF);
 
     } else {
-        // IHDR mutation
-        if (memcmp(type_ptr, "IHDR", 4) == 0 && len == 13) {
-            int f = rand() % 5;
-
-            if (f < 2) { // width/height
-                mutate_havoc(data_ptr + (f * 4), 4);
-            } else {
-                data_ptr[8 + (f - 2)] ^= (rand() & 0xFF);
-            }
-        } else if (len > 0) {
-            data_ptr[rand() % len] ^= 0xFF;
+        // IHDR / SPECIAL
+        if (memcmp(type_ptr, "IHDR", 4) == 0 && len >= 13) {
+            data_ptr[8 + (rand() % 5)] ^= (rand() & 0xFF);
+        } else if (len > 0 && !is_idat) {
+             data_ptr[rand() % len] ^= 0xFF;
         }
     }
 

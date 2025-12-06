@@ -7,9 +7,6 @@ CPU:
 	Cores:	10
 
 
-
-
-
 # No seed
 Number of crashes: 0
 Coverage: 0.08%

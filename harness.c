@@ -4,8 +4,9 @@
 #include <string.h>
 
 /**
- * @brief Shared cleanup for read-side resources.
+ * @brief
  */
+
 static void cleanup_and_exit(FILE *fp,
                              png_structp png,
                              png_infop info,
@@ -14,32 +15,35 @@ static void cleanup_and_exit(FILE *fp,
     // 1. Free pixel row data
     if (row_pointers) {
         for (png_uint_32 y = 0; y < height; y++) {
+            // Only free rows that were successfully allocated
             if (row_pointers[y]) {
                 free(row_pointers[y]);
             }
         }
+        // Free the array of pointers
         free(row_pointers);
     }
-
+    
     // 2. Destroy libpng structures
     if (png || info) {
+        // Pass addresses of structures, NULL is fine if one is already NULL
         png_destroy_read_struct(png ? &png : NULL,
                                 info ? &info : NULL,
                                 NULL);
     }
-
+    
     // 3. Close the file
     if (fp) fclose(fp);
 }
 
+// Very small wrapper around libpng reading logic.
 int main(int argc, char **argv) {
-    if (argc < 3) return 0;
-
-    FILE *fp      = fopen(argv[1], "rb");
-    char *outfile = argv[2];
+     if (argc < 3) return 0;
+    FILE *fp = fopen(argv[1], "rb");
+    char* outfile = argv[2];
     if (!fp) return 0;
 
-    // --- PNG signature check (from old code) ---
+    // Read and check PNG signature
     unsigned char header[8];
     if (fread(header, 1, 8, fp) != 8) {
         fclose(fp);
@@ -57,11 +61,6 @@ int main(int argc, char **argv) {
         return 0;
     }
 
-    /* Provide I/O */
-    // We already opened fp above and read 8 signature bytes.
-    png_init_io(png, fp);
-    png_set_sig_bytes(png, 8);  // tell libpng we've already read 8 bytes
-
     png_infop info = png_create_info_struct(png);
     if (!info) {
         png_destroy_read_struct(&png, NULL, NULL);
@@ -69,23 +68,25 @@ int main(int argc, char **argv) {
         return 0;
     }
 
-    // Data pointers and dimensions (from old code)
-    png_bytep  *row_pointers = NULL;
-    png_uint_32 width = 0, height = 0;
+    // Define pointers for data and dimensions
+    png_bytep *row_pointers = NULL;
+    png_uint_32 width = 0, height = 0; // Initialize to 0 for cleanup safety
 
     if (setjmp(png_jmpbuf(png))) {
-        /* Swallow all libpng longjmp errors. */
+       /* Swallow all libpng longjmp errors. */
         cleanup_and_exit(fp, png, info, row_pointers, height);
         return 0;
     }
 
-    /// Insert APIs to test
+     /// Insert APIs to test
     /// Some interesting APIs to test that modify the PNG attributes:
     /// png_set_expand, png_set_gray_to_rgb, png_set_palette_to_rgb, png_set_filler, png_set_scale_16, png_set_packing
     /// Some interesting APIs to test that fetch the PNG attributes:
-    /// png_get_channels, png_get_color_type, png_get_rowbytes, png_get_image_width, png_get_image_height,
+    /// png_get_channels, png_get_color_type, png_get_rowbytes, png_get_image_width, png_get_image_height, 
 
-    // --- Read PNG header & apply your transform pipeline ---
+    
+    png_init_io(png, fp);
+    png_set_sig_bytes(png, 8); // We already read the first 8 bytes
 
     // Read PNG header and info chunks (up to the pixel data)
     png_read_info(png, info);
@@ -93,7 +94,7 @@ int main(int argc, char **argv) {
     int bit_depth, color_type, interlace_type;
     int compression_type, filter_method;
 
-    // Get IHDR details (from old code)
+    // Get IHDR details
     png_get_IHDR(png, info,
                  &width, &height,
                  &bit_depth, &color_type,
@@ -117,20 +118,14 @@ int main(int argc, char **argv) {
     if (bit_depth == 16)
         png_set_strip_16(png);
 
-    // (Optional) ensure RGBA via filler + gray_to_rgb, if you like:
-    // png_set_filler(png, 0xFF, PNG_FILLER_AFTER);
-    // png_set_gray_to_rgb(png);
-
     // Update info after transformations
     png_read_update_info(png, info);
 
     // Get final row byte count AFTER transformations
     png_size_t rowbytes = png_get_rowbytes(png, info);
 
-    // Fuzzing safety check: Avoid huge allocations that cause DoS (from old code)
-    if (height == 0 || rowbytes == 0 ||
-        height > 100000 ||
-        (size_t)height * rowbytes > 100000000) {
+    // Fuzzing safety check: Avoid huge allocations that cause DoS
+    if (height == 0 || rowbytes == 0 || height > 100000 || (size_t)height * rowbytes > 100000000) {
         cleanup_and_exit(fp, png, info, NULL, 0);
         return 0;
     }
@@ -145,74 +140,31 @@ int main(int argc, char **argv) {
     // Allocate memory for each row's pixel data
     for (png_uint_32 y = 0; y < height; y++) {
         row_pointers[y] = (png_bytep)malloc(rowbytes);
+        // If allocation fails, we must jump to the cleanup handler
         if (!row_pointers[y]) {
-            // y = number of rows successfully allocated so far
+            // Need to set height to 'y' here for partial cleanup
             cleanup_and_exit(fp, png, info, row_pointers, y);
             return 0;
         }
     }
 
-    // Read the entire image data (this exercises decompression and filtering)
+    // Read the entire image data (this exercises the decompression and filtering)
     png_read_image(png, row_pointers);
 
-    // Read end info (IEND + ancillary data)
+    // Read end info (read remaining chunks like IEND and process ancillary data)
     png_read_end(png, info);
-
+    
     // Check and read gamma for additional coverage
     double gamma;
     if (png_get_gAMA(png, info, &gamma)) {
+        // Simply reading the value is enough to test the API
         (void)gamma;
     }
-
-    // Example of get APIs (already executed, but illustrative)
+    
+    // Example of using other 'get' APIs (already executed, but illustrative)
     png_get_image_width(png, info);
     png_get_image_height(png, info);
-    png_get_channels(png, info);
-    png_get_color_type(png, info);
-    png_get_rowbytes(png, info);
 
-    /// Optional write API
-    FILE *out = fopen(outfile, "wb");
-    if (!out) {
-        perror("open output");
-        cleanup_and_exit(fp, png, info, row_pointers, height);
-        return 1;
-    }
-
-    png_structp wpng = png_create_write_struct(PNG_LIBPNG_VER_STRING, NULL, NULL, NULL);
-    png_infop   winfo = png_create_info_struct(wpng);
-    if (!wpng || !winfo) {
-        fclose(out);
-        cleanup_and_exit(fp, png, info, row_pointers, height);
-        if (wpng || winfo) png_destroy_write_struct(&wpng, &winfo);
-        return 1;
-    }
-
-    if (setjmp(png_jmpbuf(wpng))) {
-        fclose(out);
-        png_destroy_write_struct(&wpng, &winfo);
-        cleanup_and_exit(fp, png, info, row_pointers, height);
-        return 1;
-    }
-
-    png_init_io(wpng, out);
-
-    // Write as 8-bit RGBA (matches transforms if you added filler/gray_to_rgb)
-    png_set_IHDR(wpng, winfo,
-                 width, height, 8,
-                 PNG_COLOR_TYPE_RGBA,
-                 PNG_INTERLACE_NONE,
-                 PNG_COMPRESSION_TYPE_BASE,
-                 PNG_FILTER_TYPE_BASE);
-
-    png_write_info(wpng, winfo);
-    png_write_image(wpng, row_pointers);
-    png_write_end(wpng, winfo);
-
-    fclose(out);
-    png_destroy_write_struct(&wpng, &winfo);
-
-    // Final cleanup for read-side resources
     cleanup_and_exit(fp, png, info, row_pointers, height);
 
     return 0;

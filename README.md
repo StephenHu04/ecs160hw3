@@ -10,7 +10,7 @@
 
 
 
-### 1. AFL++ & libpng
+### 1. Runnining Program
 
 Run script.sh
 ```
@@ -18,7 +18,6 @@ bash script.sh
 ```
 
 
-### 2. Running AFL++
 All four programs will run simultaneously for an hour before being terminated
 
 
@@ -27,7 +26,7 @@ Ctrl + C to stop
 
 
 
-### 3. Viewing Results
+### 2. Viewing Results
 
 Inside each output folder (out_no_seeds/, out_png_seeds/), look at:
 
@@ -42,6 +41,7 @@ unique_crashes — number of crashes
 out_XXX/crashes/
 ```
 Each file here is a crashing input, just count them
+
 
 
 

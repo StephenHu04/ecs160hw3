@@ -38,10 +38,18 @@ static void cleanup_and_exit(FILE *fp,
 
 // Very small wrapper around libpng reading logic.
 int main(int argc, char **argv) {
-     if (argc < 3) return 0;
-    FILE *fp = fopen(argv[1], "rb");
-    char* outfile = argv[2];
-    if (!fp) return 0;
+    // Check for input file (needs 2 arguments: program name + file path)
+    if (argc < 2) {
+        return 0;
+    }
+
+    const char *filename = argv[1];
+
+
+    FILE *fp = fopen(filename, "rb");
+    if (!fp) {
+        return 0;
+    }
 
     // Read and check PNG signature
     unsigned char header[8];
@@ -73,18 +81,15 @@ int main(int argc, char **argv) {
     png_uint_32 width = 0, height = 0; // Initialize to 0 for cleanup safety
 
     if (setjmp(png_jmpbuf(png))) {
-       /* Swallow all libpng longjmp errors. */
+        // Any libpng error will longjmp here. Perform full cleanup.
         cleanup_and_exit(fp, png, info, row_pointers, height);
         return 0;
     }
-
-     /// Insert APIs to test
+    /// Insert APIs to test
     /// Some interesting APIs to test that modify the PNG attributes:
     /// png_set_expand, png_set_gray_to_rgb, png_set_palette_to_rgb, png_set_filler, png_set_scale_16, png_set_packing
     /// Some interesting APIs to test that fetch the PNG attributes:
     /// png_get_channels, png_get_color_type, png_get_rowbytes, png_get_image_width, png_get_image_height, 
-
-    
     png_init_io(png, fp);
     png_set_sig_bytes(png, 8); // We already read the first 8 bytes
 

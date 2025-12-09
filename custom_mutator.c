@@ -1,21 +1,30 @@
-// png_mutator.c
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
 
-// ----------------------- PNG CONSTANTS -----------------------
 #define PNG_SIG_SIZE 8
-static const uint8_t PNG_SIG[8] = {
+static const uint8_t PNG_SIG[PNG_SIG_SIZE] = {
     0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A
 };
 
 #define MAX_CHUNKS 2048
+#define IHDR "IHDR"
+#define IDAT "IDAT"
 
-// ----------------------- CRC32 IMPLEMENTATION -----------------------
+// Valid IHDR and IDAT chunks of PNG file
+int valid_bit_depths[] = {1, 2, 4, 8, 16};
+int valid_color_types[] = {0, 2, 3, 4, 6};
+
 static uint32_t crc_table[256];
 static int crc_table_computed = 0;
 
+typedef struct {
+    uint8_t *mutated_buf;
+    size_t buf_size;
+} my_mutator_t;
+
+// CRC table checksum to detect accidental changes
 static void make_crc_table(void) {
     uint32_t c;
     for (int n = 0; n < 256; n++) {
@@ -29,6 +38,7 @@ static void make_crc_table(void) {
     crc_table_computed = 1;
 }
 
+// Helper function to update CRC over buffer of byts
 static uint32_t update_crc(uint32_t crc, const uint8_t *buf, int len) {
     if (!crc_table_computed) make_crc_table();
     uint32_t c = crc;
@@ -38,32 +48,11 @@ static uint32_t update_crc(uint32_t crc, const uint8_t *buf, int len) {
     return c;
 }
 
+// Helper function to calculate CRC of a PNG
 static uint32_t calculate_crc(const uint8_t *buf, int len) {
     return update_crc(0xffffffffL, buf, len) ^ 0xffffffffL;
 }
 
-// ----------------------- MUTATOR STATE -----------------------
-typedef struct {
-    uint8_t *out_buf;
-    size_t out_buf_size;
-} mutator_state_t;
-
-void *afl_custom_init(void *afl, unsigned int seed) {
-    mutator_state_t *s = calloc(1, sizeof(mutator_state_t));
-    if (!s) return NULL;
-    srand(seed); 
-    return s;
-}
-
-void afl_custom_deinit(void *data) {
-    mutator_state_t *s = data;
-    if (s) {
-        free(s->out_buf);
-        free(s);
-    }
-}
-
-// ----------------------- UTILITIES -----------------------
 static void write_be32(uint8_t *p, uint32_t v) {
     p[0] = (v >> 24) & 0xFF;
     p[1] = (v >> 16) & 0xFF;
@@ -71,148 +60,121 @@ static void write_be32(uint8_t *p, uint32_t v) {
     p[3] = (v)       & 0xFF;
 }
 
-static void mutate_havoc(uint8_t *buf, size_t size) {
-    if (size == 0) return;
-    size_t pos = rand() % size;
-    int type = rand() % 3;
+// Allocate an initial buffer 
+void *afl_custom_init(void *afl, unsigned int seed) {
+    my_mutator_t *data = calloc(1, sizeof(my_mutator_t));
+    if (!data) {
+        perror("afl_custom_init alloc");
+        return NULL;
+    }
 
-    if (type == 0) buf[pos] ^= 1 << (rand() % 8);
-    else if (type == 1) buf[pos] = rand() & 0xFF;
-    else buf[pos] = buf[pos] + ((rand() % 11) - 5);
+    data->mutated_buf = malloc(MAX_CHUNKS * 1024); 
+    data->buf_size = MAX_CHUNKS * 1024;
+    srand(seed); 
+    return data;
 }
 
-// ----------------------- PNG MUTATION -----------------------
-size_t afl_custom_fuzz(
-    void *data,
-    uint8_t *buf, size_t buf_size,
-    uint8_t **out_buf,
-    uint8_t *add_buf, size_t add_buf_size,
-    size_t max_size
-) {
-    mutator_state_t *s = data;
+// Helper function to free memory
+void afl_custom_deinit(void *data) {
+    my_mutator_t *mutator = (my_mutator_t *)data;
+    if (mutator) {
+        free(mutator->mutated_buf);
+        free(mutator);
+    }
+}
 
-    // Safety check for size to prevent realloc failure or huge memory usage
-    if (buf_size > 10 * 1024 * 1024) { // limit to 10MB
-        *out_buf = buf;
+// AFL++ signature
+size_t afl_custom_fuzz(void *data, 
+                       uint8_t *buf, size_t buf_size, 
+                       uint8_t **out_buf, 
+                       uint8_t *add_buf, size_t add_buf_size, 
+                       size_t max_size) {
+    
+    my_mutator_t *mutator = (my_mutator_t *)data;
+
+    // Size checking buffer
+    if (buf_size > mutator->buf_size) {
+        mutator->mutated_buf = realloc(mutator->mutated_buf, buf_size);
+        mutator->buf_size = buf_size;
+    }
+
+    // Copy original input to our scratch buffer
+    memcpy(mutator->mutated_buf, buf, buf_size);
+    
+    // Pointer for AFL to read from
+    *out_buf = mutator->mutated_buf;
+
+    // Validate PNG signature
+    if (buf_size < 33 || memcmp(mutator->mutated_buf, PNG_SIG, PNG_SIG_SIZE) != 0) {
         return buf_size;
-    }
+    } 
 
-    if (s->out_buf_size < buf_size + 4096) {
-        uint8_t *new_buf = realloc(s->out_buf, buf_size + 4096);
-        if (!new_buf) {
-            *out_buf = buf; // Fallback if OOM
-            return buf_size; 
-        }
-        s->out_buf = new_buf;
-        s->out_buf_size = buf_size + 4096;
-    }
-
-    memcpy(s->out_buf, buf, buf_size);
-    *out_buf = s->out_buf;
-
-    // FAST EXIT: Not PNG -> just havoc
-    if (buf_size < PNG_SIG_SIZE ||
-        memcmp(buf, PNG_SIG, PNG_SIG_SIZE) != 0 ||
-        (rand() % 100 < 5)) { // Reduced havoc to 5%
-        mutate_havoc(s->out_buf, buf_size);
-        return buf_size;
-    }
-
-    // ----------------------- PARSE PNG CHUNKS -----------------------
+    uint8_t *out = mutator->mutated_buf;
+    
     size_t chunk_offsets[MAX_CHUNKS];
     int chunk_count = 0;
+    // Skip first 8 bytes of PNG signature
+    size_t offset = PNG_SIG_SIZE;
 
-    size_t off = PNG_SIG_SIZE;
-    while (off + 12 <= buf_size && chunk_count < MAX_CHUNKS) {
-        uint32_t len =
-            (s->out_buf[off+0] << 24) |
-            (s->out_buf[off+1] << 16) |
-            (s->out_buf[off+2] << 8)  |
-            (s->out_buf[off+3]);
-
-        size_t total_chunk = 12 + (size_t)len;
-
+    // Parse chunks
+    while (offset + 12 < buf_size && chunk_count < MAX_CHUNKS) {
+        uint32_t len = (out[offset] << 24) | (out[offset+1] << 16) |
+                       (out[offset+2] << 8)  | (out[offset+3]);
+        
+        // Overflow checks
         if (len > 0x7FFFFFFF) break;
-        if (off + total_chunk > buf_size) break;
-        if (off + total_chunk < off) break;
+        size_t total_chunk = 12 + (size_t)len;
+        if (offset + total_chunk > buf_size) break;
+        if (offset + total_chunk < offset) break; 
 
-        chunk_offsets[chunk_count++] = off;
-        off += total_chunk;
+        chunk_offsets[chunk_count++] = offset;
 
-        if (memcmp(s->out_buf + off - 12 + 4, "IEND", 4) == 0)
-            break;
+        offset += total_chunk;
+        // Basic IEND check to stop parsing
+        if (offset >= 12 && memcmp(out + offset - 12 + 4, "IEND", 4) == 0) break;
     }
 
-    if (chunk_count == 0) {
-        mutate_havoc(s->out_buf, buf_size);
-        return buf_size;
-    }
+    if (chunk_count == 0) return buf_size;
 
-    // ----------------------- SELECT CHUNK -----------------------
-    size_t chunk_off = chunk_offsets[rand() % chunk_count];
-    uint32_t len =
-        (s->out_buf[chunk_off+0] << 24) |
-        (s->out_buf[chunk_off+1] << 16) |
-        (s->out_buf[chunk_off+2] << 8)  |
-        (s->out_buf[chunk_off+3]);
+    // Pick a random chunk to mutate
+    size_t c_off = chunk_offsets[rand() % chunk_count];
+    uint32_t len = (out[c_off] << 24) | (out[c_off+1] << 16) |
+                   (out[c_off+2] << 8)  | (out[c_off+3]);
 
-    uint8_t *type_ptr = s->out_buf + chunk_off + 4;
-    uint8_t *data_ptr = s->out_buf + chunk_off + 8;
-    uint8_t *crc_ptr  = data_ptr + len;
+    uint8_t *type = out + c_off + 4;
+    uint8_t *chunk_data = out + c_off + 8;
+    uint8_t *crc_ptr = chunk_data + len;
 
-    // CRITICAL FIX: Detect IDAT chunks
-    int is_idat = (memcmp(type_ptr, "IDAT", 4) == 0);
+    // Mutate IDAT chunk data
+    int is_idat = (memcmp(type, IDAT, 4) == 0);
 
-    // ----------------------- MUTATE -----------------------
-    int strategy = rand() % 4;
-
-    if (strategy == 0) {
-        // DATA MUTATION
-        // FIX: Retries to find a non-IDAT chunk to mutate
-        if (is_idat && chunk_count > 1) {
-             int retries = 5;
-             while (is_idat && retries-- > 0) {
-                 chunk_off = chunk_offsets[rand() % chunk_count];
-                 type_ptr = s->out_buf + chunk_off + 4;
-                 is_idat = (memcmp(type_ptr, "IDAT", 4) == 0);
-             }
-             // Refresh pointers
-             len = (s->out_buf[chunk_off] << 24) | (s->out_buf[chunk_off+1] << 16) |
-                   (s->out_buf[chunk_off+2] << 8) | (s->out_buf[chunk_off+3]);
-             data_ptr = s->out_buf + chunk_off + 8;
-             crc_ptr  = data_ptr + len;
-        }
-
-        if (!is_idat && len > 0) {
-            int n = 1 + (rand() % 5);
-            for (int i = 0; i < n; i++) {
-                size_t pos = rand() % len;
-                data_ptr[pos] ^= (rand() & 0xFF);
-            }
+    // Mutate IHDR bit and color within valid ranges
+    if (!memcmp(type, IHDR, 4) && len >= 13) {
+        if (rand() % 2 == 0) {
+            // Flip bit depth
+            out[c_off + 8 + 8] = valid_bit_depths[rand() % 5];
         } else {
-             // Fallback for IDAT: mutate type (safe) instead of data
-             type_ptr[rand() % 4] ^= 0x20;
+            // Flip color type
+            out[c_off + 8 + 9] = valid_color_types[rand() % 5];
         }
-
-    } else if (strategy == 1) {
-        // TYPE MUTATION
-        type_ptr[rand() % 4] ^= 0x20;
-
-    } else if (strategy == 2) {
-        // LENGTH CORRUPTION (skip 50% of the time to be safe)
-        if (rand() % 2 == 0) s->out_buf[chunk_off + 3] ^= (rand() & 0xFF);
-
-    } else {
-        // IHDR / SPECIAL
-        if (memcmp(type_ptr, "IHDR", 4) == 0 && len >= 13) {
-            data_ptr[8 + (rand() % 5)] ^= (rand() & 0xFF);
-        } else if (len > 0 && !is_idat) {
-             data_ptr[rand() % len] ^= 0xFF;
+    }
+    
+    // Mutate IDAT chunk data
+    else if (is_idat) {
+        if (len > 0) {
+            size_t pos = rand() % len;
+            chunk_data[pos] ^= (rand() & 0xFF);  // mutate the IDAT chunk data
         }
     }
 
-    // ----------------------- FIX CRC -----------------------
-    uint32_t crc = calculate_crc(type_ptr, 4 + len);
+    // Mutate ancillary chunk data
+    else if (len > 0) {
+        size_t pos = rand() % len;
+        chunk_data[pos] ^= (rand() & 0xFF);
+    }
+
+    // Fix CRC
+    uint32_t crc = calculate_crc(type, 4 + len);
     write_be32(crc_ptr, crc);
 
     return buf_size;

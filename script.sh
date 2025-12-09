@@ -1,54 +1,61 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# ==========================================
-# CONFIGURATION
-# ==========================================
-DURATION="3600s"   # Set to 3600s for 1 hour, or 60s for a quick test
+# config
+DURATION="3600s"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# ==========================================
-# AGGRESSIVE CLEANUP TRAP (Fixes Ctrl+C)
-# ==========================================
+# check required files
+for file in harness.c custom_mutator.c; do
+    if [ ! -f "$ROOT/$file" ]; then
+        echo "[!] Error: Missing required file '$file' in $ROOT"
+        exit 1
+    fi
+done
+
+# check input directory for seeds
+if [ ! -d "$ROOT/in_png" ] || [ -z "$(ls -A "$ROOT/in_png")" ]; then
+   echo "[!] Error: 'in_png' directory is empty or missing!"
+   exit 1
+fi
+
+# clean previous runs info
+echo "[*] Cleaning previous run data..."
+rm -rf "$ROOT/out_no_seeds" "$ROOT/out_with_seeds" "$ROOT/out_sanitizer_seeds" "$ROOT/out_custom_mutator"
+
+
 cleanup() {
-    echo -e "\n\n[!] CAUGHT CTRL+C! KILLING EVERYTHING..."
-    
-    # 1. Kill direct child processes of this script
+    echo -e "\n\n[!] Terminate EVERYTHING..."
     pkill -P $$ || true
-    
-    # 2. Force kill specific binaries (Nuclear option)
-    # This ensures no orphaned fuzzer processes stay alive
     pkill -f "afl-fuzz" || true
     pkill -f "png_fuzz_nosani" || true
     pkill -f "png_fuzz_san" || true
-    
     echo "[!] All fuzzers terminated. Exiting."
     exit 1
 }
-
-# Trap SIGINT (Ctrl+C) and SIGTERM
 trap cleanup SIGINT SIGTERM
 
+echo "=========================================================="
 echo "[*] Project Root: $ROOT"
 echo "[*] Fuzzing Duration: $DURATION"
+echo "=========================================================="
 
-# 1. INSTALL DEPENDENCIES
+# check/install dependencies
 echo "[*] Checking/Installing dependencies..."
 sudo apt-get update -qq
 sudo apt-get install -y -qq build-essential git autoconf automake libtool pkg-config zlib1g-dev clang
 
-# 2. SETUP AFL++
+# setup AFL++
 if [ ! -d "$ROOT/AFLplusplus" ]; then
     echo "[*] Cloning AFL++..."
     git clone https://github.com/AFLplusplus/AFLplusplus.git
 fi
-# Only build if afl-fuzz doesn't exist to save time
 if [ ! -f "$ROOT/AFLplusplus/afl-fuzz" ]; then
     echo "[*] Building AFL++..."
     make -C "$ROOT/AFLplusplus" distrib > /dev/null 2>&1
 fi
 
-# 3. BUILD FUNCTION (Libpng + Harness)
+# build target function
 build_target() {
     local mode="$1"
     local bin_name="$2"
@@ -56,12 +63,15 @@ build_target() {
 
     echo "[*] Building Target: $bin_name ($mode)"
     
-    # Clean clone of libpng
-    rm -rf "$ROOT/libpng"
-    git clone -q https://github.com/glennrp/libpng.git "$ROOT/libpng"
+    # Don't re-clone if it exists, just clean it
+    if [ ! -d "$ROOT/libpng" ]; then
+        git clone -q https://github.com/glennrp/libpng.git "$ROOT/libpng"
+    fi
+    
     cd "$ROOT/libpng" || exit
-
-    # Configure
+    # Reset git to ensure clean build state
+    git clean -fdx > /dev/null
+    
     [ -x ./autogen.sh ] && ./autogen.sh > /dev/null
     export CC="$ROOT/AFLplusplus/afl-cc"
     
@@ -74,54 +84,51 @@ build_target() {
     ./configure --disable-shared > /dev/null
     make -j"$(nproc)" > /dev/null
 
-    # Link Harness
     PNG_LIB="$(ls .libs/libpng*.a | head -n 1)"
     "$CC" -I. ../harness.c "$PNG_LIB" -lz -lm -o "../$bin_name"
     cd "$ROOT"
 }
 
-# 4. COMPILE TARGETS
+# build targets
 build_target "Part B (No Sanitizers)" "png_fuzz_nosani" "no"
 build_target "Part C (Sanitizers)"    "png_fuzz_san"    "yes"
 
-# 5. COMPILE CUSTOM MUTATOR
+# compile custom mutator
 echo "[*] Compiling Custom Mutator..."
 gcc -shared -Wall -O3 custom_mutator.c -o custom_mutator.so -fPIC
 
-# 6. SETUP INPUTS
-mkdir -p "$ROOT/in_empty" "$ROOT/in_png"
+# prepare directories
+mkdir -p "$ROOT/in_empty"
 [ ! -f "$ROOT/in_empty/seed" ] && echo "X" > "$ROOT/in_empty/seed"
 
-# 7. RUN PARALLEL FUZZERS
+# run fuzzers in parallel
 export AFL_SKIP_CPUFREQ=1
 export AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1
 export AFL_NO_UI=1
 
 echo "=========================================================="
-echo " Launching 4 Fuzzers in PARALLEL for $DURATION..."
-echo " Press Ctrl+C at any time to FORCE KILL all jobs."
+echo " Launching 4 all Fuzzers in running in background in parrallel for $DURATION..."
+echo " Press Ctrl+C at any time to terminate all jobs."
 echo "=========================================================="
 
-# Helper to run quietly in background
 run() {
-    # The 'setsid' helps keep the process group distinct, but our cleanup trap handles it anyway
     timeout "$DURATION" bash -c "$3" > /dev/null 2>&1 || true &
-    echo "[+] Started: $1 -> Output: $2"
+    echo "[+] Started: $1"
 }
 
-# Job 1: No Seeds
+# part B without seeds
 run "Part B (No Seeds)" "out_no_seeds" \
     "./AFLplusplus/afl-fuzz -i in_empty -o out_no_seeds -- ./png_fuzz_nosani @@"
 
-# Job 2: With Seeds
+#part B with seeds
 run "Part B (Seeds)" "out_with_seeds" \
     "./AFLplusplus/afl-fuzz -i in_png -o out_with_seeds -- ./png_fuzz_nosani @@"
 
-# Job 3: Sanitizers
+#  part C
 run "Part C (Sanitizers)" "out_sanitizer_seeds" \
     "./AFLplusplus/afl-fuzz -i in_png -o out_sanitizer_seeds -- ./png_fuzz_san @@"
 
-# Job 4: Custom Mutator
+#  part D
 (
     export AFL_CUSTOM_MUTATOR_LIBRARY="$ROOT/custom_mutator.so"
     export AFL_CUSTOM_MUTATOR_ONLY=1
@@ -129,6 +136,10 @@ run "Part C (Sanitizers)" "out_sanitizer_seeds" \
         "./AFLplusplus/afl-fuzz -i in_png -o out_custom_mutator -- ./png_fuzz_san @@"
 )
 
-# Wait for timeout or user interrupt
+# wait for all background jobs to finish
 wait
+echo "=========================================================="
 echo "[+] All fuzzing jobs finished (or timed out)."
+echo "[*] Check the 'out_*' directories for result status."
+echo "=========================================================="
+
